@@ -7,6 +7,7 @@ import Book from "@/database/models/book.model";
 import BookSegment from "@/database/models/book-segment.model";
 import { del } from "@vercel/blob";
 import { auth } from "@clerk/nextjs/server";
+import { getUserPlanLimits } from "@/lib/subscription-utils.server";
 
 export const getAllBooks = async () => {
     try {
@@ -76,7 +77,17 @@ export const createBook = async (data: CreateBook) => {
         }
 
         try {
-            // TODO: Check subscription limits before creating a book
+            // Check book upload limit based on user's plan
+            const { maxBooks } = await getUserPlanLimits();
+            const currentBookCount = await Book.countDocuments({ clerkId: userId });
+            if (currentBookCount >= maxBooks) {
+                return {
+                    success: false,
+                    error: `You've reached the limit of ${maxBooks} book${maxBooks === 1 ? '' : 's'} on your current plan. Upgrade to upload more.`,
+                    isBillingError: true,
+                };
+            }
+
             const book = await Book.create({
                 ...data,
                 clerkId: userId,
