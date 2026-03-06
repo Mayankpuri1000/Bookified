@@ -14,7 +14,7 @@ export const serializeData = <T>(data: T): T => JSON.parse(JSON.stringify(data))
 // Auto generate slug
 export function generateSlug(text: string): string {
   return text
-      .replace(/\.[^/.]+$/, '') // Remove file extension (.pdf, .txt, etc.)
+      .replace(/\.(pdf|epub|txt)$/i, '') // Remove known file extensions (.pdf, .epub, .txt)
       .toLowerCase() // Convert to lowercase
       .trim() // Remove whitespace from both ends
       .replace(/[^\w\s-]/g, '') // Remove special characters (keep letters, numbers, spaces, hyphens)
@@ -32,6 +32,7 @@ export const splitIntoSegments = (
     text: string,
     segmentSize: number = 500, // Maximum words per segment
     overlapSize: number = 50, // Words to overlap between segments for context
+    startSegmentIndex: number = 0, // Starting segment index
 ): TextSegment[] => {
   // Validate parameters to prevent infinite loops
   if (segmentSize <= 0) {
@@ -44,7 +45,7 @@ export const splitIntoSegments = (
   const words = text.split(/\s+/).filter((word) => word.length > 0);
   const segments: TextSegment[] = [];
 
-  let segmentIndex = 0;
+  let segmentIndex = startSegmentIndex;
   let startIndex = 0;
 
   while (startIndex < words.length) {
@@ -131,7 +132,8 @@ export async function parsePDFFile(file: File) {
     const coverDataURL = canvas.toDataURL('image/png');
 
     // Extract text from all pages
-    let fullText = '';
+    const segments: TextSegment[] = [];
+    let currentSegmentIndex = 0;
 
     for (let pageNum = 1; pageNum <= pdfDocument.numPages; pageNum++) {
       const page = await pdfDocument.getPage(pageNum);
@@ -140,11 +142,15 @@ export async function parsePDFFile(file: File) {
           .filter((item) => 'str' in item)
           .map((item) => (item as { str: string }).str)
           .join(' ');
-      fullText += pageText + '\n';
+      
+      const trimmedText = pageText.trim();
+      if (trimmedText.length > 0) {
+        const pageSegments = splitIntoSegments(trimmedText, 500, 50, currentSegmentIndex);
+        const annotatedSegments = pageSegments.map((seg) => ({ ...seg, pageNumber: pageNum }));
+        segments.push(...annotatedSegments);
+        currentSegmentIndex += pageSegments.length;
+      }
     }
-
-    // Split text into segments for search
-    const segments = splitIntoSegments(fullText);
 
     // Clean up PDF document resources
     await pdfDocument.destroy();

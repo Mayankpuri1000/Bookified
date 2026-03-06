@@ -5,6 +5,8 @@ import { CreateBook, TextSegment } from "@/types";
 import { generateSlug, serializeData } from "../utils";
 import Book from "@/database/models/book.model";
 import BookSegment from "@/database/models/book-segment.model";
+import { del } from "@vercel/blob";
+import { auth } from "@clerk/nextjs/server";
 
 export const getAllBooks = async () => {
     try {
@@ -23,10 +25,23 @@ export const getAllBooks = async () => {
     }
 }
 
+export const deleteFileByUrl = async (url: string) => {
+    try {
+        await del(url);
+        return { success: true };
+    } catch (error) {
+        console.error("Error deleting file", error);
+        return { success: false, error };
+    }
+}
+
 export const checkBookExists = async (title: string) => {
     try {
         await connectToDB();
         const slug = generateSlug(title);
+        if (!slug) {
+            throw new Error("Invalid title: generated slug is empty");
+        }
         const existingBook = await Book.findOne({ slug }).lean();
         if(existingBook){
             return {
@@ -48,29 +63,43 @@ export const checkBookExists = async (title: string) => {
 
 export const createBook = async (data: CreateBook) => {
     try {
+        const { userId } = await auth();
+        if (!userId) {
+            return { success: false, error: "Unauthorized" };
+        }
+
         await connectToDB();
 
         const slug = generateSlug(data.title);
-
-        const existingBook = await Book.findOne({ slug }).lean();
-        if(existingBook){
-            return {
-                success: true,
-                data: serializeData(existingBook), 
-                alreadyExists: true
-            }
+        if (!slug) {
+            return { success: false, error: "Invalid title: generated slug is empty" };
         }
 
-        // TODO: Check subscription limits before creating a book
-        const book = await Book.create({
-            ...data,
-            slug, 
-            totalSegments: 0
-        })
+        try {
+            // TODO: Check subscription limits before creating a book
+            const book = await Book.create({
+                ...data,
+                clerkId: userId,
+                slug, 
+                totalSegments: 0
+            });
 
-        return {
-            success: true,
-            data: serializeData(book)
+            return {
+                success: true,
+                data: serializeData(book)
+            };
+        } catch (error: any) {
+            if (error?.code === 11000 && error?.keyPattern?.slug) {
+                const existingBook = await Book.findOne({ slug }).lean();
+                if (existingBook) {
+                    return {
+                        success: true,
+                        data: serializeData(existingBook), 
+                        alreadyExists: true
+                    };
+                }
+            }
+            throw error;
         }
     } catch (e) {
         console.error("Error creating a book", e);
@@ -83,13 +112,27 @@ export const createBook = async (data: CreateBook) => {
 
 export const saveBookSegments = async (bookId: string, clerkId: string, segments: TextSegment[]) => {
     try {
+        const { userId } = await auth();
+        if (!userId) {
+            return { success: false, error: "Unauthorized" };
+        }
+
         await connectToDB();
+
+        const book = await Book.findById(bookId).lean();
+        if (!book) {
+            return { success: false, error: "Book not found" };
+        }
+        if (book.clerkId !== userId) {
+            return { success: false, error: "Unauthorized: You do not own this book" };
+        }
+
         console.log("Saving book segments......");
         
         const segmentsToInsert = segments.map(({text, segmentIndex, pageNumber, wordCount}) => ({
             content: text,
             bookId,
-            clerkId,
+            clerkId: userId,
             segmentIndex,
             pageNumber,
             wordCount
@@ -106,7 +149,8 @@ export const saveBookSegments = async (bookId: string, clerkId: string, segments
     catch (e) {
         console.error("Error saving book segments", e);
         await BookSegment.deleteMany({ bookId });
-        await Book.findByIdAndUpdate(bookId);
-        console.log("Book segments deleted successfully");
+        await Book.findByIdAndDelete(bookId);
+        console.error("Book and segments rolled back successfully due to error.");
+        return { success: false, error: e };
     }
 }

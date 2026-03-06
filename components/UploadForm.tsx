@@ -20,7 +20,7 @@ import {
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import LoadingOverlay from './LoadingOverlay';
 import { useAuth } from '@clerk/nextjs';
-import { checkBookExists, createBook, saveBookSegments } from '@/lib/actions/book.actions';
+import { checkBookExists, createBook, saveBookSegments, deleteFileByUrl } from '@/lib/actions/book.actions';
 import { useRouter } from 'next/navigation';
 import { parsePDFFile } from '@/lib/utils';
 import { upload } from '@vercel/blob/client';
@@ -70,12 +70,24 @@ const UploadForm = () => {
         setIsSubmitting(true);
         // Simulate API call
 
+        let uploadedPdfPathname = "";
+        let uploadedCoverPathname = "";
+
         try {
             const existsCheck = await checkBookExists(data.title);
-            if (existsCheck.exists && existsCheck.book) {
+
+            if ('error' in existsCheck || (existsCheck as any).success === false) {
+                const error = (existsCheck as any).error;
+                toast.error(
+                    error instanceof Error ? error.message : typeof error === 'string' ? error : "Failed to verify book existence"
+                );
+                return;
+            }
+
+            if (existsCheck.exists && (existsCheck as any).book) {
                 toast.info("Book already exists");
                 form.reset();
-                router.push(`/book/${existsCheck.book.slug}`);
+                router.push(`/book/${(existsCheck as any).book.slug}`);
                 return;
             }
 
@@ -94,6 +106,7 @@ const UploadForm = () => {
                 handleUploadUrl: "/api/upload",
                 contentType: "application/pdf"
             })
+            uploadedPdfPathname = uploadedPdfBlob.pathname;
 
             let coverUrl: string;
 
@@ -104,6 +117,7 @@ const UploadForm = () => {
                     handleUploadUrl: "/api/upload",
                     contentType: coverFile.type
                 });
+                uploadedCoverPathname = uploadedCoverBlob.pathname;
                 coverUrl = uploadedCoverBlob.url;
             } else {
                 const response = await fetch(parsedPdf.cover);
@@ -113,6 +127,7 @@ const UploadForm = () => {
                     handleUploadUrl: "/api/upload",
                     contentType: blob.type
                 });
+                uploadedCoverPathname = uploadedCoverBlob.pathname;
                 coverUrl = uploadedCoverBlob.url;
             }
 
@@ -128,10 +143,14 @@ const UploadForm = () => {
             })
 
             if (!book.success) {
+                if (uploadedPdfPathname) await deleteFileByUrl(uploadedPdfPathname);
+                if (uploadedCoverPathname) await deleteFileByUrl(uploadedCoverPathname);
                 toast.error("Failed to upload book");
                 return;
             }
             if (book.alreadyExists) {
+                if (uploadedPdfPathname) await deleteFileByUrl(uploadedPdfPathname);
+                if (uploadedCoverPathname) await deleteFileByUrl(uploadedCoverPathname);
                 toast.info("Book already exists");
                 form.reset();
                 router.push(`/book/${book.data.slug}`);
@@ -140,6 +159,8 @@ const UploadForm = () => {
 
             const segments = await saveBookSegments(book.data._id, userId, parsedPdf.content);
             if (!segments?.success) {
+                if (uploadedPdfPathname) await deleteFileByUrl(uploadedPdfPathname);
+                if (uploadedCoverPathname) await deleteFileByUrl(uploadedCoverPathname);
                 toast.error("Failed to save book segments");
                 throw new Error("Failed to save book segments");
             }
@@ -149,6 +170,8 @@ const UploadForm = () => {
 
         } catch (error) {
             console.error(error);
+            if (uploadedPdfPathname) await deleteFileByUrl(uploadedPdfPathname);
+            if (uploadedCoverPathname) await deleteFileByUrl(uploadedCoverPathname);
             toast.error("Failed to upload book");
         }
         finally {
