@@ -3,7 +3,7 @@ import Image from "next/image";
 
 export function LibraryHero() {
     return (
-        <section className="pt-28">
+        <section>
             <div className="library-hero-card">
                 <div className="library-hero-content">
                     {/* Left side: Heading, Description, CTA */}
